@@ -9,12 +9,19 @@
 #include "led/led.h"
 
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <driver/gpio.h>
 
 #define TAG "ESP32-MarsbearSupport"
 
 class SimpleGpioLed : public Led {
 public:
+    static constexpr uint32_t BLINK_TICK_MS = 50;
+    // Blink periods (full on/off cycle each)
+    static constexpr uint32_t BLINK_FAST_MS = 100;   // starting / upgrading / connecting
+    static constexpr uint32_t BLINK_MEDIUM_MS = 300; // speaking
+    static constexpr uint32_t BLINK_SLOW_MS = 500;   // wifi configuring / activating
+
     SimpleGpioLed(gpio_num_t gpio) : gpio_(gpio) {
         gpio_config_t io_conf = {
             .pin_bit_mask = 1ULL << gpio_,
@@ -25,32 +32,85 @@ public:
         };
         gpio_config(&io_conf);
         gpio_set_level(gpio_, 0);
+
+        esp_timer_create_args_t args = {
+            .callback = &SimpleGpioLed::TimerCb,
+            .arg = this,
+            .name = "led_blink"
+        };
+        ESP_ERROR_CHECK(esp_timer_create(&args, &timer_));
+        ESP_ERROR_CHECK(esp_timer_start_periodic(timer_, BLINK_TICK_MS * 1000ULL));
+    }
+
+    ~SimpleGpioLed() {
+        if (timer_) {
+            esp_timer_stop(timer_);
+            esp_timer_delete(timer_);
+        }
     }
 
     void OnStateChanged() override {
         auto& app = Application::GetInstance();
         auto state = app.GetDeviceState();
         switch (state) {
-            case kDeviceStateListening:
-            case kDeviceStateSpeaking:
-            case kDeviceStateConnecting:
-                gpio_set_level(gpio_, 1);
-                break;
             case kDeviceStateStarting:
-            case kDeviceStateWifiConfiguring:
             case kDeviceStateUpgrading:
+            case kDeviceStateConnecting:
+                SetPattern(true, BLINK_FAST_MS);   // fast blink
+                break;
+            case kDeviceStateSpeaking:
+                SetPattern(true, BLINK_MEDIUM_MS); // medium blink
+                break;
+            case kDeviceStateWifiConfiguring:
             case kDeviceStateActivating:
-                gpio_set_level(gpio_, 1);
+                SetPattern(true, BLINK_SLOW_MS);   // slow blink
+                break;
+            case kDeviceStateListening:
+                SetPattern(true, 0);               // steady on
                 break;
             case kDeviceStateIdle:
             default:
-                gpio_set_level(gpio_, 0);
+                SetPattern(false, 0);              // off
                 break;
         }
     }
 
 private:
+    void SetPattern(bool on, uint32_t blink_period_ms) {
+        steady_level_ = on ? 1 : 0;
+        blink_ = blink_period_ms > 0;
+        blink_ticks_ = blink_period_ms / BLINK_TICK_MS;
+        tick_ = 0;
+        level_ = steady_level_;
+        SetLevel(level_);
+    }
+
+    void TimerCbImpl() {
+        if (!blink_) {
+            return;
+        }
+        if (++tick_ >= blink_ticks_) {
+            tick_ = 0;
+            level_ = !level_;
+            SetLevel(level_);
+        }
+    }
+
+    static void TimerCb(void* arg) {
+        static_cast<SimpleGpioLed*>(arg)->TimerCbImpl();
+    }
+
+    void SetLevel(bool level) {
+        gpio_set_level(gpio_, level ? 1 : 0);
+    }
+
     gpio_num_t gpio_;
+    esp_timer_handle_t timer_ = nullptr;
+    int level_ = 0;
+    int steady_level_ = 0;
+    bool blink_ = false;
+    uint32_t blink_ticks_ = 0;
+    uint32_t tick_ = 0;
 };
 
 class CompactWifiBoard : public WifiBoard {
