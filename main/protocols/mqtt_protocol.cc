@@ -23,7 +23,12 @@ MqttProtocol::MqttProtocol() {
                 auto alive = protocol->alive_;  // Capture alive flag
                 app.Schedule([protocol, alive]() {
                     if (*alive) {
-                        protocol->StartMqttClient(false);
+                        bool success = protocol->StartMqttClient(false);
+                        if (!success && *alive) {
+                            // Reschedule reconnect if connection attempt failed,
+                            // otherwise MQTT stays disconnected forever until manual reset
+                            esp_timer_start_once(protocol->reconnect_timer_, MQTT_RECONNECT_INTERVAL_MS * 1000);
+                        }
                     }
                 });
             }
@@ -232,26 +237,50 @@ void MqttProtocol::CloseAudioChannel(bool send_goodbye) {
 }
 
 bool MqttProtocol::OpenAudioChannel() {
-    if (mqtt_ == nullptr || !mqtt_->IsConnected()) {
-        ESP_LOGI(TAG, "MQTT is not connected, try to connect now");
-        if (!StartMqttClient(true)) {
+    const int kMaxHelloRetries = 2;
+    bool hello_received = false;
+    for (int attempt = 0; attempt < kMaxHelloRetries; attempt++) {
+        if (mqtt_ == nullptr || !mqtt_->IsConnected()) {
+            ESP_LOGI(TAG, "MQTT is not connected, try to connect now (attempt %d/%d)", attempt + 1, kMaxHelloRetries);
+            if (!StartMqttClient(true)) {
+                if (attempt < kMaxHelloRetries - 1) {
+                    vTaskDelay(pdMS_TO_TICKS(1000));
+                    continue;
+                }
+                return false;
+            }
+        }
+
+        error_occurred_ = false;
+        session_id_ = "";
+        xEventGroupClearBits(event_group_handle_, MQTT_PROTOCOL_SERVER_HELLO_EVENT);
+
+        auto message = GetHelloMessage();
+        if (!SendText(message)) {
+            if (attempt < kMaxHelloRetries - 1) {
+                mqtt_.reset();
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                continue;
+            }
             return false;
+        }
+
+        // 等待服务器响应
+        EventBits_t bits = xEventGroupWaitBits(event_group_handle_, MQTT_PROTOCOL_SERVER_HELLO_EVENT, pdTRUE, pdFALSE, pdMS_TO_TICKS(10000));
+        if (bits & MQTT_PROTOCOL_SERVER_HELLO_EVENT) {
+            hello_received = true;
+            break;
+        }
+
+        ESP_LOGE(TAG, "Failed to receive server hello (attempt %d/%d)", attempt + 1, kMaxHelloRetries);
+        if (attempt < kMaxHelloRetries - 1) {
+            mqtt_.reset();
+            vTaskDelay(pdMS_TO_TICKS(1000));
         }
     }
 
-    error_occurred_ = false;
-    session_id_ = "";
-    xEventGroupClearBits(event_group_handle_, MQTT_PROTOCOL_SERVER_HELLO_EVENT);
-
-    auto message = GetHelloMessage();
-    if (!SendText(message)) {
-        return false;
-    }
-
-    // 等待服务器响应
-    EventBits_t bits = xEventGroupWaitBits(event_group_handle_, MQTT_PROTOCOL_SERVER_HELLO_EVENT, pdTRUE, pdFALSE, pdMS_TO_TICKS(10000));
-    if (!(bits & MQTT_PROTOCOL_SERVER_HELLO_EVENT)) {
-        ESP_LOGE(TAG, "Failed to receive server hello");
+    if (!hello_received) {
+        ESP_LOGE(TAG, "All hello attempts failed");
         SetError(Lang::Strings::SERVER_TIMEOUT);
         return false;
     }

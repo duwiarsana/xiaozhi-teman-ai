@@ -11,13 +11,15 @@
 
 #ifdef AUDIO_I2S_METHOD_SIMPLEX
 
-#define AUDIO_I2S_MIC_GPIO_WS   GPIO_NUM_25
-#define AUDIO_I2S_MIC_GPIO_SCK  GPIO_NUM_26
-#define AUDIO_I2S_MIC_GPIO_DIN  GPIO_NUM_32
+// Speaker pakai pin yang sama dengan radio (sudah terbukti working)
+#define AUDIO_I2S_SPK_GPIO_DOUT GPIO_NUM_22
+#define AUDIO_I2S_SPK_GPIO_BCLK GPIO_NUM_26
+#define AUDIO_I2S_SPK_GPIO_LRCK GPIO_NUM_25
 
-#define AUDIO_I2S_SPK_GPIO_DOUT GPIO_NUM_33
-#define AUDIO_I2S_SPK_GPIO_BCLK GPIO_NUM_14
-#define AUDIO_I2S_SPK_GPIO_LRCK GPIO_NUM_27
+// Mic dipindah ke pin lain (untuk instalasi mic belakangan)
+#define AUDIO_I2S_MIC_GPIO_WS   GPIO_NUM_27
+#define AUDIO_I2S_MIC_GPIO_SCK  GPIO_NUM_14
+#define AUDIO_I2S_MIC_GPIO_DIN  GPIO_NUM_32
 
 #else
 
@@ -35,22 +37,6 @@
 
 #define ML307_RX_PIN            GPIO_NUM_16
 #define ML307_TX_PIN            GPIO_NUM_17
-
-#define DISPLAY_SDA_PIN GPIO_NUM_4
-#define DISPLAY_SCL_PIN GPIO_NUM_15
-#define DISPLAY_WIDTH   128
-
-#if CONFIG_OLED_SSD1306_128X32
-#define DISPLAY_HEIGHT  32
-#elif CONFIG_OLED_SSD1306_128X64
-#define DISPLAY_HEIGHT  64
-#else
-#error "OLED display type is not selected"
-#endif
-
-#define DISPLAY_MIRROR_X true
-#define DISPLAY_MIRROR_Y true
-
 
 // A MCP Test: Control a lamp
 #define LAMP_GPIO GPIO_NUM_18
