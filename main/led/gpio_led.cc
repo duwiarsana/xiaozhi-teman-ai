@@ -8,8 +8,6 @@
 #define DEFAULT_BRIGHTNESS 50
 #define HIGH_BRIGHTNESS 100
 #define LOW_BRIGHTNESS 10
-
-#define IDLE_BRIGHTNESS 5
 #define SPEAKING_BRIGHTNESS 75
 #define UPGRADING_BRIGHTNESS 25
 #define ACTIVATING_BRIGHTNESS 35
@@ -82,6 +80,18 @@ GpioLed::GpioLed(gpio_num_t gpio, int output_invert, ledc_timer_t timer_num, led
     };
     ESP_ERROR_CHECK(esp_timer_create(&blink_timer_args, &blink_timer_));
 
+    esp_timer_create_args_t pulse_timer_args = {
+        .callback = [](void *arg) {
+            auto led = static_cast<GpioLed*>(arg);
+            led->OnPulseTimer();
+        },
+        .arg = this,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "Pulse Timer",
+        .skip_unhandled_events = false,
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&pulse_timer_args, &pulse_timer_));
+
     xTaskCreate(EventTask, "LedEvent", 2048, this, 
             tskIDLE_PRIORITY + 2, &event_task_handle_);
 
@@ -90,6 +100,7 @@ GpioLed::GpioLed(gpio_num_t gpio, int output_invert, ledc_timer_t timer_num, led
 
 GpioLed::~GpioLed() {
     esp_timer_stop(blink_timer_);
+    esp_timer_stop(pulse_timer_);
     if (ledc_initialized_) {
         ledc_fade_stop(ledc_channel_.speed_mode, ledc_channel_.channel);
         ledc_fade_func_uninstall();
@@ -111,7 +122,9 @@ void GpioLed::TurnOn() {
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
+    heartbeat_mode_ = false;
     esp_timer_stop(blink_timer_);
+    esp_timer_stop(pulse_timer_);
     ledc_fade_stop(ledc_channel_.speed_mode, ledc_channel_.channel);
     ledc_set_duty(ledc_channel_.speed_mode, ledc_channel_.channel, duty_);
     ledc_update_duty(ledc_channel_.speed_mode, ledc_channel_.channel);
@@ -123,7 +136,9 @@ void GpioLed::TurnOff() {
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
+    heartbeat_mode_ = false;
     esp_timer_stop(blink_timer_);
+    esp_timer_stop(pulse_timer_);
     ledc_fade_stop(ledc_channel_.speed_mode, ledc_channel_.channel);
     ledc_set_duty(ledc_channel_.speed_mode, ledc_channel_.channel, 0);
     ledc_update_duty(ledc_channel_.speed_mode, ledc_channel_.channel);
@@ -147,7 +162,9 @@ void GpioLed::StartBlinkTask(int times, int interval_ms) {
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
+    heartbeat_mode_ = false;
     esp_timer_stop(blink_timer_);
+    esp_timer_stop(pulse_timer_);
     ledc_fade_stop(ledc_channel_.speed_mode, ledc_channel_.channel);
 
     blink_counter_ = times * 2;
@@ -155,8 +172,32 @@ void GpioLed::StartBlinkTask(int times, int interval_ms) {
     esp_timer_start_periodic(blink_timer_, interval_ms * 1000);
 }
 
+void GpioLed::StartHeartbeat(uint32_t period_ms, uint32_t pulse_ms) {
+    if (!ledc_initialized_) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    heartbeat_mode_ = true;
+    heartbeat_pulse_ms_ = pulse_ms;
+    esp_timer_stop(pulse_timer_);
+    ledc_fade_stop(ledc_channel_.speed_mode, ledc_channel_.channel);
+    ledc_set_duty(ledc_channel_.speed_mode, ledc_channel_.channel, 0);
+    ledc_update_duty(ledc_channel_.speed_mode, ledc_channel_.channel);
+    esp_timer_stop(blink_timer_);
+    esp_timer_start_periodic(blink_timer_, period_ms * 1000);
+}
+
 void GpioLed::OnBlinkTimer() {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (heartbeat_mode_) {
+        // Turn on for a short pulse, then schedule the turn-off.
+        ledc_set_duty(ledc_channel_.speed_mode, ledc_channel_.channel, duty_);
+        ledc_update_duty(ledc_channel_.speed_mode, ledc_channel_.channel);
+        esp_timer_stop(pulse_timer_);
+        esp_timer_start_once(pulse_timer_, heartbeat_pulse_ms_ * 1000);
+        return;
+    }
     blink_counter_--;
     if (blink_counter_ & 1) {
         ledc_set_duty(ledc_channel_.speed_mode, ledc_channel_.channel, duty_);
@@ -170,13 +211,23 @@ void GpioLed::OnBlinkTimer() {
     ledc_update_duty(ledc_channel_.speed_mode, ledc_channel_.channel);
 }
 
+void GpioLed::OnPulseTimer() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (heartbeat_mode_) {
+        ledc_set_duty(ledc_channel_.speed_mode, ledc_channel_.channel, 0);
+        ledc_update_duty(ledc_channel_.speed_mode, ledc_channel_.channel);
+    }
+}
+
 void GpioLed::StartFadeTask() {
     if (!ledc_initialized_) {
         return;
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
+    heartbeat_mode_ = false;
     esp_timer_stop(blink_timer_);
+    esp_timer_stop(pulse_timer_);
     ledc_fade_stop(ledc_channel_.speed_mode, ledc_channel_.channel);
     fade_up_ = true;
     ledc_set_fade_with_time(ledc_channel_.speed_mode,
@@ -217,9 +268,10 @@ void GpioLed::OnStateChanged() {
             StartContinuousBlink(500);
             break;
         case kDeviceStateIdle:
-            SetBrightness(IDLE_BRIGHTNESS);
-            TurnOn();
-            // TurnOff();
+            // Power-efficient heartbeat: a short pulse every 2s instead of a
+            // continuously lit LED (~0.05% duty cycle).
+            SetBrightness(DEFAULT_BRIGHTNESS);
+            StartHeartbeat(2000, 1);
             break;
         case kDeviceStateConnecting:
             SetBrightness(DEFAULT_BRIGHTNESS);

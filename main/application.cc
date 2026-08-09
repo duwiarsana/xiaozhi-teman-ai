@@ -649,6 +649,7 @@ void Application::ShowActivationCode(const std::string& code, const std::string&
     }};
 
     // This sentence uses 9KB of SRAM, so we need to wait for it to finish
+    ESP_LOGI(TAG, "Activation code: %s", code.c_str());
     Alert(Lang::Strings::ACTIVATION, message.c_str(), "link", Lang::Sounds::OGG_ACTIVATION);
 
     for (const auto& digit : code) {
@@ -667,7 +668,15 @@ void Application::Alert(const char* status, const char* message, const char* emo
     display->SetEmotion(emotion);
     display->SetChatMessage("system", message);
     if (!sound.empty()) {
-        audio_service_.PlaySound(sound);
+        // The config AP must stay visible during wifi_configuring. Playing a
+        // sound here calls AudioService::PlaySound -> EnableOutput(true),
+        // which starts the I2S BCLK/LRCK clocks (e.g. on GPIO8/7 of the
+        // ESP32-C3 Super Mini). Those ~MHz clocks are routed near the WiFi
+        // antenna and jam the AP beacon, so the hotspot never shows up.
+        // Skip sounds while configuring; they still play normally later.
+        if (GetDeviceState() != kDeviceStateWifiConfiguring) {
+            audio_service_.PlaySound(sound);
+        }
     }
 }
 

@@ -33,10 +33,17 @@ class GpioLed : public Led {
     esp_timer_handle_t blink_timer_ = nullptr;
     bool fade_up_ = true;
     TaskHandle_t event_task_handle_;
-    
+
+    // Power-efficient heartbeat (short pulse every period)
+    bool heartbeat_mode_ = false;
+    uint32_t heartbeat_pulse_ms_ = 1;
+    esp_timer_handle_t pulse_timer_ = nullptr;
+
     static void EventTask(void* arg);
     void StartBlinkTask(int times, int interval_ms);
+    void StartHeartbeat(uint32_t period_ms, uint32_t pulse_ms);
     void OnBlinkTimer();
+    void OnPulseTimer();
 
     void BlinkOnce();
     void Blink(int times, int interval_ms);

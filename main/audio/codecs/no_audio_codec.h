@@ -31,6 +31,14 @@ public:
     NoAudioCodecSimplex(int input_sample_rate, int output_sample_rate, gpio_num_t spk_bclk, gpio_num_t spk_ws, gpio_num_t spk_dout, i2s_std_slot_mask_t spk_slot_mask, gpio_num_t mic_sck, gpio_num_t mic_ws, gpio_num_t mic_din, i2s_std_slot_mask_t mic_slot_mask);
 };
 
+// ESP32-C3 (and other single-I2S-controller chips) cannot use two I2S ports.
+// Instead both the TX (speaker) and RX (mic) channels coexist on I2S port 0,
+// each with its own independent GPIO pins and clocks (simplex on same port).
+class NoAudioCodecSimplexSinglePort : public NoAudioCodec {
+public:
+    NoAudioCodecSimplexSinglePort(int input_sample_rate, int output_sample_rate, gpio_num_t spk_bclk, gpio_num_t spk_ws, gpio_num_t spk_dout, gpio_num_t mic_sck, gpio_num_t mic_ws, gpio_num_t mic_din);
+};
+
 class NoAudioCodecSimplexPdm : public NoAudioCodec {
 public:
     NoAudioCodecSimplexPdm(int input_sample_rate, int output_sample_rate, gpio_num_t spk_bclk, gpio_num_t spk_ws, gpio_num_t spk_dout, gpio_num_t mic_sck,  gpio_num_t mic_din);
