@@ -673,7 +673,9 @@ void Application::Alert(const char* status, const char* message, const char* emo
         // which starts the I2S BCLK/LRCK clocks (e.g. on GPIO8/7 of the
         // ESP32-C3 Super Mini). Those ~MHz clocks are routed near the WiFi
         // antenna and jam the AP beacon, so the hotspot never shows up.
-        // Skip sounds while configuring; they still play normally later.
+        // The Wi-Fi config prompt itself is played up-front in
+        // WifiBoard::StartWifiConfigMode before the SoftAP starts; any other
+        // alert sound during configuring is skipped.
         if (GetDeviceState() != kDeviceStateWifiConfiguring) {
             audio_service_.PlaySound(sound);
         }

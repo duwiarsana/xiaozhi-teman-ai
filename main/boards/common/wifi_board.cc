@@ -65,6 +65,7 @@ void WifiBoard::StartNetwork() {
         snprintf(hostname, sizeof(hostname), "%s-%02X%02X", config.ssid_prefix.c_str(), mac[4], mac[5]);
         config.station_hostname = hostname;
     }
+    config.show_ota_config = true;
     wifi_manager.Initialize(config);
 
     // Set unified event callback - forward to NetworkEvent with SSID data
@@ -167,6 +168,22 @@ void WifiBoard::OnWifiConnectTimeout(void* arg) {
 
 void WifiBoard::StartWifiConfigMode() {
     in_config_mode_ = true;
+#ifdef CONFIG_USE_HOTSPOT_WIFI_PROVISIONING
+    // Play the config-mode sound before bringing up the SoftAP. The I2S TX
+    // clocks running during AP start-up jam the beacon and the hotspot may
+    // not show up, so wait for playback to drain and stop the TX channel
+    // before enabling the AP.
+    Application::GetInstance().PlaySound(Lang::Sounds::OGG_WIFICONFIG);
+    auto& audio_service = Application::GetInstance().GetAudioService();
+    for (int i = 0; i < 200 && !audio_service.IsIdle(); i++) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    auto codec = Board::GetInstance().GetAudioCodec();
+    if (codec != nullptr) {
+        codec->EnableOutput(false);
+    }
+#endif
+
     // Transition to wifi configuring state
     Application::GetInstance().SetDeviceState(kDeviceStateWifiConfiguring);
 #ifdef CONFIG_USE_HOTSPOT_WIFI_PROVISIONING
